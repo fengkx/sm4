@@ -1,0 +1,12 @@
+#include <stdio.h>
+#include "sm4.h"
+
+int main() {
+	uint8_t key[] = {0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10};
+	sm4_ctx ctx;
+	sm4_set_key(key, &ctx);
+	uint8_t out[16];
+	uint8_t out_decrypt[16];
+	sm4_encrypt(key, out, &ctx);
+	sm4_decrypt(out, out_decrypt, &ctx);
+}

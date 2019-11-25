@@ -1,0 +1,8 @@
+.ccls-cache
+.gdb_history
+
+#excutable
+sm4
+
+# obj file
+*.o
