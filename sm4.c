@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "sm4.h"
+#include "randombytes.h"
 
 #define ROT32L(x, n) (x >> (32-n) | x << n)
 
@@ -103,7 +104,7 @@ static inline void store_uint32_be(uint32_t n, uint8_t * const b) {
 	b[3] = (uint8_t)(n);
 }
 
-void sm4_encrypt(const uint8_t *in, uint8_t *out, const sm4_ctx * ctx) {
+void sm4_encrypt(const uint8_t *in, uint8_t *out, const sm4_ctx *ctx) {
 	uint32_t blks[4];
 	blks[0] = load_uint32_be(in, 0);
 	blks[1] = load_uint32_be(in, 1);
@@ -139,3 +140,290 @@ void sm4_decrypt(const uint8_t *in, uint8_t *out, const sm4_ctx * ctx) {
 	store_uint32_be(blks[0], out+12);
 
 }
+
+static inline void xor_blk(uint8_t *a, uint8_t *b) {
+	uint32_t A[4], B[4];
+	A[0] = load_uint32_be(a, 0);
+	A[1] = load_uint32_be(a, 1);
+	A[2] = load_uint32_be(a, 2);
+	A[3] = load_uint32_be(a, 3);
+
+	B[0] = load_uint32_be(b, 0);
+	B[1] = load_uint32_be(b, 1);
+	B[2] = load_uint32_be(b, 2);
+	B[3] = load_uint32_be(b, 3);
+
+	A[0] ^= B[0];
+	A[1] ^= B[1];
+	A[2] ^= B[2];
+	A[3] ^= B[3];
+
+	store_uint32_be(A[0], a);
+	store_uint32_be(A[1], a+4);
+	store_uint32_be(A[2], a+8);
+	store_uint32_be(A[3], a+12);
+}
+
+
+#ifdef DEBUG
+	void print_block(uint8_t *buf) {
+		for(int i=0;i<SM4_BLOCK_SIZE;i++) {		
+			fprintf(stdout, "%02x ",buf[i]);
+		}
+		printf("\n");
+	}
+#endif
+
+
+void sm4_encrypt_file(FILE *in, FILE *out, sm4_ctx *ctx) {
+	long sz, nremain, nread;
+	uint8_t buf[SM4_BLOCK_SIZE];
+	fseek(in, 0, SEEK_END);
+	sz = ftell(in);
+	rewind(in);
+#ifdef DEBUG
+	printf("file size=%ld\n", sz);
+#endif	
+	nremain = sz;
+	nread = 0;
+	long nwrite = 0;
+	int nw;
+	int n = 0;
+	uint8_t out_buf[SM4_BLOCK_SIZE];
+	while(nremain >= SM4_BLOCK_SIZE) {
+		n = fread(buf, 1, SM4_BLOCK_SIZE, in);
+		nremain -= n;
+		nread += n;
+#ifdef DEBUG
+		printf("read once %ld\n", n);
+#endif
+		sm4_encrypt(buf, out_buf, ctx);
+#ifdef DEBUG
+		print_block(buf);
+		print_block(out_buf);
+#endif
+		nw = fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+		nwrite += nw;
+
+
+	}
+#ifdef DEBUG
+	printf("nremain: %ld\n", nremain);
+	printf("nread: %ld\n", nread);
+	printf("nwrite: %ld\n", nwrite);
+#endif
+
+
+	uint8_t padding_byte_len = 0;
+	if(nremain == 0) {
+		padding_byte_len = SM4_BLOCK_SIZE;
+	} else {
+		padding_byte_len = SM4_BLOCK_SIZE - nremain;
+	}
+
+#ifdef DEBUG
+	printf("padding_byte_len: %d\n", padding_byte_len);
+#endif
+
+	memset(buf, 0, SM4_BLOCK_SIZE);
+
+	n = fread(buf, 1, nremain, in);
+	nremain -= n;
+	nread += n;
+	if(padding_byte_len != SM4_BLOCK_SIZE) {
+		memset(buf+n, padding_byte_len, padding_byte_len);
+		sm4_encrypt(buf, out_buf, ctx);
+#ifdef DEBUG
+		print_block(buf);
+		print_block(out_buf);
+#endif
+		nw = fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+		nwrite += nw;
+	} else {
+		uint8_t *extra_padding_block = (uint8_t *)malloc(SM4_BLOCK_SIZE *sizeof(uint8_t));
+		memset(extra_padding_block, SM4_BLOCK_SIZE, SM4_BLOCK_SIZE);
+		sm4_encrypt(extra_padding_block, out_buf, ctx);
+		free(extra_padding_block);
+#ifdef DEBUG
+		print_block(buf);
+		print_block(out_buf);
+#endif
+		nw = fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+		nwrite += nw;
+	}
+}
+
+void sm4_decrypt_file(FILE *in, FILE *out, sm4_ctx *ctx) {	
+	long sz, nremain, nread;
+	uint8_t buf[SM4_BLOCK_SIZE];
+	uint8_t out_buf[SM4_BLOCK_SIZE];
+	fseek(in, -SM4_BLOCK_SIZE, SEEK_END);
+	sz = ftell(in) + SM4_BLOCK_SIZE;
+	fread(buf, 1, SM4_BLOCK_SIZE, in);
+	rewind(in);
+	sm4_decrypt(buf, out_buf, ctx);
+	uint8_t padding_byte_len = out_buf[SM4_BLOCK_SIZE-1];
+#ifdef DEBUG
+	print_block(buf);
+	print_block(out_buf);
+	printf("padding_byte_len: %d\n", padding_byte_len);
+#endif
+	long content_byte_len = sz - padding_byte_len;
+	nread =0;
+	long nwrite=0;
+	long nw=0, n=0;
+	long ncremain = content_byte_len;
+
+	while(ncremain >= SM4_BLOCK_SIZE) {
+		n = fread(buf, 1, SM4_BLOCK_SIZE, in);
+		nread += n;
+		ncremain -= n;
+#ifdef DEBUG
+		printf("read once %ld\n", n);
+#endif
+		sm4_decrypt(buf, out_buf, ctx);
+#ifdef  DEBUG
+		print_block(buf);
+		print_block(out_buf);
+#endif
+		nw = fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+		nwrite += nw;
+	}
+		
+		if(ncremain>0) {
+			n = fread(buf, 1, SM4_BLOCK_SIZE, in);
+			sm4_decrypt(buf, out_buf, ctx);
+#ifdef DEBUG
+			print_block(buf);
+			print_block(out_buf);
+#endif
+			nw = fwrite(out_buf, 1, ncremain, out);
+			nwrite +=nw;
+
+		}
+		
+}
+
+void sm4_cbc_encrypt_file(FILE *in, FILE *out, sm4_ctx *ctx) {
+	uint8_t iv[SM4_BLOCK_SIZE];
+	uint8_t buf[SM4_BLOCK_SIZE], out_buf[SM4_BLOCK_SIZE];
+	
+	long sz, nremain, nread=0, padding_byte_len;
+	fseek(in, 0, SEEK_END);
+	sz = ftell(in);
+#ifdef DEBUG
+	printf("sz:%ld\n", sz);
+#endif
+	nremain = sz;
+	rewind(in);
+
+	randombytes(iv, SM4_BLOCK_SIZE);
+	fwrite(iv, 1, SM4_BLOCK_SIZE, out);
+
+
+#ifdef DEBUG
+	print_block(iv);
+#endif
+
+
+
+	int n=0;
+	memcpy(out_buf, iv, SM4_BLOCK_SIZE);
+	while(nremain >= SM4_BLOCK_SIZE) {
+		n = fread(buf, 1, SM4_BLOCK_SIZE, in);
+		nremain -=n;
+		nread += n;
+#ifdef DEBUG
+		printf("source: \n");
+		print_block(buf);
+#endif
+		xor_blk(buf, out_buf);
+#ifdef DEBUG
+		printf("xor: \n");
+		print_block(buf);
+#endif
+		sm4_encrypt(buf, out_buf, ctx);
+		fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+	}
+
+	padding_byte_len = SM4_BLOCK_SIZE - nremain;
+
+	memset(buf, 0, SM4_BLOCK_SIZE);
+	n = fread(buf, 1, nremain, in);
+	nremain -= n;
+	nread += n;
+
+	if(padding_byte_len != SM4_BLOCK_SIZE) {
+		fread(buf, 1, nremain, in);
+		memset(buf+n, padding_byte_len, padding_byte_len);
+		xor_blk(buf, out_buf);
+		sm4_encrypt(buf, out_buf, ctx);
+		fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+	} else {
+		memset(buf, SM4_BLOCK_SIZE, SM4_BLOCK_SIZE);
+		xor_blk(buf, out_buf);
+		sm4_encrypt(buf, out_buf, ctx);
+		fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+	}
+
+
+}
+
+void sm4_cbc_decrypt_file(FILE *in, FILE *out, sm4_ctx *ctx) {
+	long nread, sz, nremain;
+	uint8_t iv[SM4_BLOCK_SIZE];
+	uint8_t buf[SM4_BLOCK_SIZE], out_buf[SM4_BLOCK_SIZE];
+	fseek(in, 0, SEEK_END);
+#ifdef DEBUG
+	perror("fseek");
+#endif
+	sz = ftell(in);
+	rewind(in);
+#ifdef DEBUG
+	printf("sz: %ld\n", sz);
+#endif
+
+	fread(iv, 1, SM4_BLOCK_SIZE, in);
+	nremain = sz - SM4_BLOCK_SIZE;
+
+#ifdef DEBUG
+	print_block(iv);
+#endif
+	int n= 0;
+
+	while(nremain > SM4_BLOCK_SIZE) {
+		n = fread(buf, 1, SM4_BLOCK_SIZE, in);
+		nremain -= n;
+#ifdef DEBUG
+		printf("source: \n");
+		print_block(buf);
+#endif
+		sm4_decrypt(buf, out_buf, ctx);
+#ifdef DEBUG
+		printf("dec: \n");
+		print_block(out_buf);
+#endif
+		xor_blk(out_buf, iv);
+#ifdef DEBUG
+		printf("xor: \n");
+		print_block(out_buf);
+#endif
+		memcpy(iv, buf, SM4_BLOCK_SIZE);
+		fwrite(out_buf, 1, SM4_BLOCK_SIZE, out);
+
+	}
+
+	n = fread(buf, 1, SM4_BLOCK_SIZE, in);
+	sm4_decrypt(buf, out_buf, ctx);
+	xor_blk(out_buf, iv);
+	long padding_byte_len = out_buf[SM4_BLOCK_SIZE-1];
+#ifdef DEBUG
+	printf("padding_byte_len: %ld\n", padding_byte_len);
+#endif
+	fwrite(out_buf, 1, SM4_BLOCK_SIZE-padding_byte_len, out);
+
+
+
+
+}
+

@@ -1,6 +1,7 @@
 #ifndef _sm4_H_
 #define _sm4_H_
 
+#include <stdio.h>
 #include <stdint.h>
 
 #define SM4_DECRYPT 0
@@ -20,9 +21,17 @@ sm4_ctx;
 	void sm4_encrypt(const uint8_t *in, uint8_t *out, const sm4_ctx *ctx);
 	void sm4_decrypt(const uint8_t *in, uint8_t *out, const sm4_ctx *ctx);
 
+
 	static inline uint32_t load_uint32_be(const uint8_t *b, int n);
 	static inline void store_uint32_be(uint32_t v, uint8_t * const b);
+	static inline void xor_blk(uint8_t *a, uint8_t *b);
+
 	static inline void SM4_F(uint32_t * const blks, const uint32_t *rkg); // blks len should be 4 as 128bit
 	static inline uint32_t SM4_T(uint32_t X);
+
+	void sm4_encrypt_file(FILE *in, FILE *out, sm4_ctx *ctx);
+	void sm4_decrypt_file(FILE *in, FILE *out, sm4_ctx *ctx);
+	void sm4_cbc_encrypt_file(FILE *in, FILE *out, sm4_ctx *ctx);
+	void sm4_cbc_decrypt_file(FILE *in, FILE *out, sm4_ctx *ctx);
 
 #endif // _sm4_H_
